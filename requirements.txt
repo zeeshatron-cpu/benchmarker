@@ -1,0 +1,17 @@
+# Core pipeline has ZERO required third-party dependencies — it runs on the
+# standard library alone with the built-in mock adapters and heuristic judge.
+#
+# Install extras only for the backends you actually use:
+
+# Read YAML config files (JSON config works without this):
+pyyaml>=6.0
+
+# Real LLM comparison + the LLM judge:
+anthropic>=0.40
+
+# Optional second comparison model:
+# openai>=1.0
+
+# Drive the Fenzo AI web app (Chromium is preconfigured in this environment;
+# do NOT run `playwright install` here):
+# playwright>=1.40

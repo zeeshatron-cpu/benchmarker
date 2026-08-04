@@ -1,0 +1,4 @@
+{"id": "q-0001", "prompt": "How do I center a div horizontally and vertically in CSS?", "tags": ["css", "frontend"], "recorded_at": "2026-08-04T00:00:00+00:00"}
+{"id": "q-0002", "prompt": "Explain the difference between a process and a thread.", "tags": ["cs", "concepts"], "recorded_at": "2026-08-04T00:00:00+00:00"}
+{"id": "q-0003", "prompt": "Write a Python function that returns the nth Fibonacci number efficiently.", "tags": ["python", "algorithms"], "recorded_at": "2026-08-04T00:00:00+00:00"}
+{"id": "q-0004", "prompt": "What are the trade-offs of using microservices versus a monolith?", "tags": ["architecture"], "recorded_at": "2026-08-04T00:00:00+00:00"}

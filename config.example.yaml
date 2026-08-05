@@ -1,0 +1,55 @@
+# Fenzo benchmarker configuration.
+#
+# Copy to config.yaml and edit. With no config file at all, the pipeline falls
+# back to an all-mock line-up so you can see the whole flow with zero setup:
+#   python -m benchmarker record "How do I center a div?" --tags css
+#   python -m benchmarker run
+
+# The model whose responses we are evaluating. Everything is compared against it.
+subject: fenzo
+
+# The judge that scores answers. Uses the Anthropic SDK (ANTHROPIC_API_KEY or an
+# `ant auth login` profile). If the SDK isn't installed, the pipeline
+# automatically falls back to the offline heuristic judge.
+judge:
+  name: judge
+  type: anthropic
+  model: claude-opus-5
+
+paths:
+  queries: queries/queries.jsonl
+  responses_log: logs/responses.jsonl
+  comparisons_log: logs/comparisons.jsonl
+  reports_dir: reports
+
+# The line-up. `type` selects the adapter. Swap any `mock` entry for a real one.
+models:
+  # --- Fenzo AI: web-only, so we drive its UI with a headless browser. ---
+  # All selectors are examples — inspect the real Fenzo chat page and update.
+  # To start with the mock while wiring things up, use `type: mock` here.
+  - name: fenzo
+    type: fenzo_web
+    url: "https://app.fenzo.ai/chat"          # the chat page
+    input_selector: "textarea"                 # the prompt box
+    send_selector: "button[type=submit]"       # send control (omit to press Enter)
+    response_selector: "[data-role='assistant']"  # assistant message bubbles
+    ready_selector: null                       # e.g. a post-login element to await
+    storage_state: "fenzo_auth.json"           # Playwright storage-state for login
+    headless: true
+    settle_ms: 1500
+    timeout_ms: 60000
+
+  # --- Comparison LLMs via their APIs. ---
+  - name: claude-opus-5
+    type: anthropic
+    model: claude-opus-5
+    max_tokens: 2048
+
+  - name: gpt-4o
+    type: openai
+    model: gpt-4o
+    max_tokens: 2048
+
+# Tip: capture a logged-in Fenzo session once with Playwright to produce
+# fenzo_auth.json:
+#   playwright codegen --save-storage=fenzo_auth.json https://app.fenzo.ai

@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local config and captured auth — never commit secrets/sessions.
+config.yaml
+config.json
+*_auth.json
+
+# Generated artefacts.
+logs/*.jsonl
+reports/*.md
+queries/queries.jsonl

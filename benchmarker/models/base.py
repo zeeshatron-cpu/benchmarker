@@ -22,6 +22,10 @@ class ModelResponse:
     latency_s: float
     ok: bool = True
     error: str | None = None
+    # Correlates a response to one `run` invocation and one sample within it.
+    # Set by the runner, so a re-run of the same query never mixes with old data.
+    run_id: str = ""
+    repeat: int = 0
     # Free-form extras an adapter may fill in (token counts, finish reason, ...).
     meta: dict[str, Any] = field(default_factory=dict)
 
@@ -33,6 +37,8 @@ class ModelResponse:
             "latency_s": round(self.latency_s, 3),
             "ok": self.ok,
             "error": self.error,
+            "run_id": self.run_id,
+            "repeat": self.repeat,
             "meta": self.meta,
         }
 

@@ -1,8 +1,8 @@
 """Step 3 — Compare results.
 
-For each query we now hold every model's answer. This step turns that into a
-judgement focused on the question the task actually asks: *how are Fenzo's
-responses good and bad compared to the other LLMs?*
+For each query we now hold every model's answer (possibly several samples each).
+This step turns that into a judgement focused on the question the task actually
+asks: *how are Fenzo's responses good and bad compared to the other LLMs?*
 
 Two judges are available:
 
@@ -14,14 +14,18 @@ Two judges are available:
   (answered vs errored, response length, latency). Keeps the pipeline runnable
   offline and in CI; clearly labelled so nobody mistakes it for quality.
 
-Both return the same :class:`Comparison` shape so the log/report code is
-judge-agnostic.
+Both share a base :class:`Judge` that handles **repeats**: when the runner
+collected N samples per model, each sample index is judged as its own round and
+the per-model scores are averaged, with the standard deviation reported so the
+consumer can see how noisy the verdict is. Blind ordering uses a deterministic
+per-round seed, so a re-run reproduces the same anonymisation.
 """
 
 from __future__ import annotations
 
 import json
 import random
+import statistics
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -71,12 +75,25 @@ _JUDGE_SCHEMA: dict[str, Any] = {
 @dataclass
 class ModelScore:
     model: str
-    score: float
+    score: float  # mean across rounds
     rationale: str
-    latency_s: float
-    length_chars: int
+    latency_s: float  # mean across samples
+    length_chars: int  # mean across samples
     ok: bool
     rank: int = 0
+    score_stdev: float = 0.0
+    samples: int = 1
+
+
+@dataclass
+class RoundResult:
+    """One judge pass over one sample per model."""
+
+    scores: dict[str, float]  # model -> score
+    rationales: dict[str, str]
+    subject_strengths: list[str]
+    subject_weaknesses: list[str]
+    summary: str
 
 
 @dataclass
@@ -90,63 +107,128 @@ class Comparison:
     subject_strengths: list[str]
     subject_weaknesses: list[str]
     summary: str
+    run_id: str = ""
+    rounds: int = 1
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def to_dict(self) -> dict[str, Any]:
-        d = asdict(self)
-        return d
+        return asdict(self)
 
 
 def _metrics(r: ModelResponse) -> tuple[float, int]:
     return r.latency_s, len(r.text or "")
 
 
-class HeuristicJudge:
-    """Offline ranking on objective proxies — not a quality measure."""
+def _rounds_by_repeat(responses: list[ModelResponse]) -> list[dict[str, ModelResponse]]:
+    """Split responses into rounds keyed by repeat index: [{model: response}]."""
+    by_repeat: dict[int, dict[str, ModelResponse]] = {}
+    for r in responses:
+        by_repeat.setdefault(r.repeat, {})[r.model] = r
+    return [by_repeat[k] for k in sorted(by_repeat)]
 
-    name = "heuristic"
+
+class Judge:
+    """Base class: runs one round per repeat, then aggregates across rounds."""
+
+    name = "judge"
+
+    def _round(
+        self, prompt: str, subject: str, resp_by_model: dict[str, ModelResponse]
+    ) -> RoundResult:
+        raise NotImplementedError
 
     def compare(
         self, prompt: str, subject: str, responses: list[ModelResponse]
     ) -> Comparison:
-        scores: list[ModelScore] = []
+        rounds = _rounds_by_repeat(responses)
+        run_id = responses[0].run_id if responses else ""
+        query_id = responses[0].query_id if responses else ""
+
+        round_results = [self._round(prompt, subject, rd) for rd in rounds]
+
+        # Aggregate numeric scores per model across rounds.
+        per_model_scores: dict[str, list[float]] = {}
+        rationales: dict[str, str] = {}
+        for rr in round_results:
+            for model, sc in rr.scores.items():
+                per_model_scores.setdefault(model, []).append(sc)
+                rationales.setdefault(model, rr.rationales.get(model, ""))
+
+        # Aggregate objective metrics across every sample of each model.
+        metrics: dict[str, list[tuple[float, int, bool]]] = {}
         for r in responses:
             latency, length = _metrics(r)
-            # Reward answering at all and a "reasonable" length (200-1500 chars);
-            # mild penalty for latency. Purely a placeholder signal.
+            metrics.setdefault(r.model, []).append((latency, length, r.ok))
+
+        scores: list[ModelScore] = []
+        for model, vals in per_model_scores.items():
+            m = metrics.get(model, [(0.0, 0, False)])
+            scores.append(
+                ModelScore(
+                    model=model,
+                    score=round(statistics.fmean(vals), 2),
+                    score_stdev=round(statistics.pstdev(vals), 2) if len(vals) > 1 else 0.0,
+                    samples=len(vals),
+                    rationale=rationales.get(model, ""),
+                    latency_s=round(statistics.fmean([x[0] for x in m]), 3),
+                    length_chars=int(statistics.fmean([x[1] for x in m])),
+                    ok=all(x[2] for x in m),
+                )
+            )
+        _rank(scores)
+
+        # Qualitative narrative: from the first round; verdict recomputed from
+        # the aggregated means so it stays consistent with the reported scores.
+        first = round_results[0] if round_results else RoundResult({}, {}, [], [], "")
+        strengths = _dedupe([s for rr in round_results for s in rr.subject_strengths])
+        weaknesses = _dedupe([w for rr in round_results for w in rr.subject_weaknesses])
+
+        return Comparison(
+            query_id=query_id,
+            prompt=prompt,
+            subject=subject,
+            judged_by=self.name,
+            scores=scores,
+            subject_verdict=_subject_verdict(scores, subject),
+            subject_strengths=strengths or first.subject_strengths,
+            subject_weaknesses=weaknesses or first.subject_weaknesses,
+            summary=first.summary,
+            run_id=run_id,
+            rounds=len(round_results),
+        )
+
+
+class HeuristicJudge(Judge):
+    """Offline ranking on objective proxies — not a quality measure."""
+
+    name = "heuristic"
+
+    def _round(
+        self, prompt: str, subject: str, resp_by_model: dict[str, ModelResponse]
+    ) -> RoundResult:
+        scores: dict[str, float] = {}
+        rationales: dict[str, str] = {}
+        for model, r in resp_by_model.items():
+            latency, length = _metrics(r)
             if not r.ok or length == 0:
                 s = 0.0
             else:
                 length_fit = 1.0 - min(abs(length - 600) / 600, 1.0)
                 latency_fit = 1.0 - min(latency / 30.0, 1.0)
                 s = round(4 + 5 * length_fit + latency_fit, 2)
-            scores.append(
-                ModelScore(
-                    model=r.model,
-                    score=s,
-                    rationale="objective proxy (length fit + answered + latency)",
-                    latency_s=round(latency, 3),
-                    length_chars=length,
-                    ok=r.ok,
-                )
-            )
-        _rank(scores)
-        verdict = _subject_verdict(scores, subject)
-        return Comparison(
-            query_id=responses[0].query_id if responses else "",
-            prompt=prompt,
-            subject=subject,
-            judged_by=self.name,
+            scores[model] = s
+            rationales[model] = "objective proxy (length fit + answered + latency)"
+        return RoundResult(
             scores=scores,
-            subject_verdict=verdict,
+            rationales=rationales,
             subject_strengths=["(heuristic judge — enable the LLM judge for real analysis)"],
             subject_weaknesses=[],
             summary="Heuristic ranking on objective proxies; no quality judgement.",
         )
 
 
-class LLMJudge:
-    """Anthropic-backed blind evaluation of every answer for one query."""
+class LLMJudge(Judge):
+    """Anthropic-backed blind evaluation of one sample per model per round."""
 
     def __init__(self, model: str = "claude-opus-5", max_tokens: int = 2048) -> None:
         self.model = model
@@ -161,14 +243,18 @@ class LLMJudge:
             self._client = anthropic.Anthropic()
         return self._client
 
-    def compare(
-        self, prompt: str, subject: str, responses: list[ModelResponse]
-    ) -> Comparison:
-        # Anonymise: shuffle and label A/B/C so the judge can't infer the vendor.
+    def _round(
+        self, prompt: str, subject: str, resp_by_model: dict[str, ModelResponse]
+    ) -> RoundResult:
+        responses = list(resp_by_model.values())
+        # Deterministic anonymisation: seed by (query, repeat) so a re-run
+        # produces the same A/B/C ordering — reproducible, still not vendor-order.
+        seed = f"{responses[0].query_id}:{responses[0].repeat}" if responses else "0"
+        rng = random.Random(seed)
         shuffled = list(responses)
-        random.shuffle(shuffled)
+        rng.shuffle(shuffled)
         labels = {r.model: chr(ord("A") + i) for i, r in enumerate(shuffled)}
-        subject_label = labels[subject] if subject in labels else None
+        subject_label = labels.get(subject)
 
         blocks = []
         for r in shuffled:
@@ -197,38 +283,32 @@ class LLMJudge:
         text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
         data = json.loads(text)
 
-        # Map anonymised labels back to model names.
         label_to_model = {v: k for k, v in labels.items()}
-        by_model = {r.model: r for r in responses}
-        scores: list[ModelScore] = []
         judged = {s["label"]: s for s in data["scores"]}
+        scores: dict[str, float] = {}
+        rationales: dict[str, str] = {}
         for label, model in label_to_model.items():
-            r = by_model[model]
-            latency, length = _metrics(r)
             js = judged.get(label, {"score": 0, "rationale": "no score returned"})
-            scores.append(
-                ModelScore(
-                    model=model,
-                    score=float(js["score"]),
-                    rationale=js["rationale"],
-                    latency_s=round(latency, 3),
-                    length_chars=length,
-                    ok=r.ok,
-                )
-            )
-        _rank(scores)
+            scores[model] = float(js["score"])
+            rationales[model] = js["rationale"]
 
-        return Comparison(
-            query_id=responses[0].query_id if responses else "",
-            prompt=prompt,
-            subject=subject,
-            judged_by=self.name,
+        return RoundResult(
             scores=scores,
-            subject_verdict=data["subject_verdict"],
+            rationales=rationales,
             subject_strengths=data["subject_strengths"],
             subject_weaknesses=data["subject_weaknesses"],
             summary=data["summary"],
         )
+
+
+def _dedupe(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for x in items:
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
 
 
 def _rank(scores: list[ModelScore]) -> None:
@@ -252,7 +332,7 @@ def _subject_verdict(scores: list[ModelScore], subject: str) -> str:
     return "comparable"
 
 
-def make_judge(judge_cfg: dict[str, Any], allow_llm: bool = True):
+def make_judge(judge_cfg: dict[str, Any], allow_llm: bool = True) -> Judge:
     """Build an LLM judge if configured and importable, else the heuristic one."""
     if allow_llm and judge_cfg.get("type") == "anthropic":
         try:

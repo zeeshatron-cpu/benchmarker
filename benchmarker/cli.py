@@ -20,7 +20,7 @@ from .logstore import log_comparisons, log_responses
 from .models import build_adapter
 from .recorder import add_query, load_queries
 from .report import write_report
-from .runner import group_by_query, run_batch
+from .runner import group_by_query, new_run_id, run_batch
 
 
 def _cmd_record(args, cfg) -> int:
@@ -45,14 +45,16 @@ def _cmd_run(args, cfg) -> int:
     adapters = [build_adapter(spec) for spec in cfg.models]
     subject = cfg.subject
     judge = make_judge(cfg.judge, allow_llm=not args.no_llm_judge)
+    run_id = new_run_id()
+    repeats = max(1, args.repeats)
     print(
-        f"running {len(queries)} queries x {len(adapters)} models; "
-        f"subject={subject}; judge={judge.name}"
+        f"running {len(queries)} queries x {len(adapters)} models x {repeats} "
+        f"repeat(s); subject={subject}; judge={judge.name}; run_id={run_id}"
     )
 
     try:
         # Step 2 — give queries to all models.
-        responses = run_batch(queries, adapters)
+        responses = run_batch(queries, adapters, repeats=repeats, run_id=run_id)
         n_ok = sum(1 for r in responses if r.ok)
         print(f"collected {len(responses)} responses ({n_ok} ok)")
 
@@ -86,6 +88,23 @@ def _cmd_report(args, cfg) -> int:
     if not rows:
         print("no comparisons logged yet — run the pipeline first", file=sys.stderr)
         return 1
+
+    # Default to the most recent run so re-running the same queries doesn't
+    # double-count in the aggregate. "Most recent" = the run of the last row in
+    # the append-only log, not a string max of run_ids (ids aren't temporally
+    # ordered — see runner.new_run_id). `--all` or `--run-id` override.
+    logged_run_ids = [r.get("run_id", "") for r in rows if r.get("run_id")]
+    if args.run_id:
+        rows = [r for r in rows if r.get("run_id") == args.run_id]
+    elif not args.all and logged_run_ids:
+        latest = logged_run_ids[-1]
+        rows = [r for r in rows if r.get("run_id") == latest]
+        print(f"reporting on latest run {latest} (use --all for full history)")
+
+    if not rows:
+        print("no comparisons matched the selected run", file=sys.stderr)
+        return 1
+
     comparisons = [
         Comparison(
             query_id=r["query_id"],
@@ -97,6 +116,8 @@ def _cmd_report(args, cfg) -> int:
             subject_strengths=r["subject_strengths"],
             subject_weaknesses=r["subject_weaknesses"],
             summary=r["summary"],
+            run_id=r.get("run_id", ""),
+            rounds=r.get("rounds", 1),
             created_at=r.get("created_at", ""),
         )
         for r in rows
@@ -120,9 +141,15 @@ def build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run", help="run models, compare, log, report")
     run.add_argument("--query-id", nargs="*", help="limit to these query ids")
     run.add_argument("--no-llm-judge", action="store_true", help="force the heuristic judge")
+    run.add_argument(
+        "--repeats", type=int, default=1,
+        help="samples per (query, model) for variance (default 1)",
+    )
     run.set_defaults(func=_cmd_run)
 
     rep = sub.add_parser("report", help="rebuild the report from the comparisons log")
+    rep.add_argument("--all", action="store_true", help="aggregate the full log history")
+    rep.add_argument("--run-id", help="report on a specific run_id")
     rep.set_defaults(func=_cmd_report)
     return p
 

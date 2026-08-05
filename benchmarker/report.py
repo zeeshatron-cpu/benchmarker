@@ -80,12 +80,17 @@ def build_markdown(comparisons: list[Comparison], subject: str) -> str:
         lines.append(f"\n### {c.query_id} — {c.subject_verdict.upper()}")
         lines.append(f"\n> {c.prompt}")
         lines.append(f"\n{c.summary}")
+        if c.rounds > 1:
+            lines.append(f"\n_Scores averaged over {c.rounds} samples (± stdev)._")
         lines.append("\n| Rank | Model | Score | Latency (s) | Chars |")
         lines.append("| --- | --- | --- | --- | --- |")
         for s in sorted(c.scores, key=lambda x: x.rank):
             marker = " ⬅" if s.model == subject else ""
+            score_cell = f"{s.score:.1f}"
+            if s.samples > 1:
+                score_cell += f" ± {s.score_stdev:.1f}"
             lines.append(
-                f"| {s.rank} | {s.model}{marker} | {s.score:.1f} | "
+                f"| {s.rank} | {s.model}{marker} | {score_cell} | "
                 f"{s.latency_s:.2f} | {s.length_chars} |"
             )
 

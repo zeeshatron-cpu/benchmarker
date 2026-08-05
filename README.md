@@ -64,7 +64,11 @@ python -m benchmarker -c config.yaml run
 python -m benchmarker -c config.yaml report   # rebuild report from full history
 ```
 
-Force the offline judge for a dry run: `run --no-llm-judge`.
+Force the offline judge for a dry run: `run --no-llm-judge`. Collect multiple
+samples per model for variance: `run --repeats 3` (the report then shows score
+mean ± stdev). Each `run` is stamped with a unique `run_id`; `report` defaults to
+the **latest run only** so re-running the same queries doesn't double-count — use
+`report --all` for cumulative history or `report --run-id <id>` for a specific run.
 
 ## Layout
 
@@ -96,8 +100,29 @@ tests/test_pipeline.py   # end-to-end, mock-only, runs in CI
   structured outputs (`output_config.format`) so the verdict is machine-parseable.
 - **Fault isolation** — one flaky model (or a Fenzo selector that moved) yields an
   error on its own response and never aborts the batch.
-- **Append-only logs** make history cumulative and auditable; the report is always
-  regenerable from `logs/comparisons.jsonl`.
+- **Per-adapter threading** — each adapter runs on a single worker thread (models
+  parallelise across threads, not within one). This is required for the
+  Playwright-based Fenzo adapter, whose sync API must be driven from the thread
+  that created the browser.
+- **Reproducible judging** — the blind A/B/C ordering uses a deterministic
+  per-round seed, and repeats surface score variance (mean ± stdev).
+- **Append-only logs with run ids** make history cumulative and auditable; the
+  report is regenerable from `logs/comparisons.jsonl`, scoped to a run so re-runs
+  don't double-count.
+
+## Known limitations
+
+This is a prototype; treat verdicts as directional, not authoritative:
+
+- **LLM-judge bias** (length/self-preference), and no ground-truth correctness
+  check — code isn't executed, facts aren't verified. Consider multiple judges or
+  task-specific graders for high-stakes use.
+- **Latency isn't comparable** across adapters — Fenzo goes through a browser
+  (page load + render) while API models are direct calls.
+- **Web-automation fragility** — Fenzo selectors/auth break on UI changes and
+  sessions expire; automating a web app may be subject to its Terms of Service.
+- **Cost** scales with queries × models × repeats × judge calls; there's no
+  caching or API rate-limit backoff yet.
 
 ## Extending
 

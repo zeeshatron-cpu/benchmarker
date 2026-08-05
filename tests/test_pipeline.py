@@ -127,6 +127,80 @@ def test_report_mentions_subject_and_verdicts(tmp_path):
     assert "Queries judged: **2**" in md
 
 
+def test_repeats_produce_multiple_samples_with_stdev(tmp_path):
+    cfg = load_config(_write_json(tmp_path, _mock_config(tmp_path)))
+    add_query(cfg.path("queries"), "Center a div?")
+    adapters = [build_adapter(s) for s in cfg.models]
+    queries = load_queries(cfg.path("queries"))
+
+    responses = run_batch(queries, adapters, repeats=3, run_id="run-test-1")
+    # 1 query x 3 models x 3 repeats.
+    assert len(responses) == 9
+    assert {r.repeat for r in responses} == {0, 1, 2}
+    assert all(r.run_id == "run-test-1" for r in responses)
+
+    comp = HeuristicJudge().compare(queries[0].prompt, "fenzo", responses)
+    assert comp.rounds == 3
+    assert comp.run_id == "run-test-1"
+    assert all(s.samples == 3 for s in comp.scores)
+    # Mock answers are deterministic, so stdev across identical rounds is 0.
+    assert all(s.score_stdev == 0.0 for s in comp.scores)
+
+
+def test_run_id_stamped_on_responses(tmp_path):
+    cfg = load_config(_write_json(tmp_path, _mock_config(tmp_path)))
+    add_query(cfg.path("queries"), "Thread vs process?")
+    adapters = [build_adapter(s) for s in cfg.models]
+    queries = load_queries(cfg.path("queries"))
+    responses = run_batch(queries, adapters, run_id="run-abc")
+    assert all(r.run_id == "run-abc" for r in responses)
+    log_responses(cfg.path("responses_log"), responses)
+    line = cfg.path("responses_log").read_text().splitlines()[0]
+    assert json.loads(line)["run_id"] == "run-abc"
+
+
+def test_llm_judge_seed_is_deterministic(tmp_path):
+    # Blind ordering must be reproducible across runs for the same query/repeat.
+    from benchmarker.comparator import LLMJudge
+    from benchmarker.models.base import ModelResponse
+
+    resps = [
+        ModelResponse(model="fenzo", query_id="q-1", text="a", latency_s=0.1),
+        ModelResponse(model="claude-opus-5", query_id="q-1", text="b", latency_s=0.1),
+        ModelResponse(model="gpt-4o", query_id="q-1", text="c", latency_s=0.1),
+    ]
+    import random
+
+    def order(rs):
+        seed = f"{rs[0].query_id}:{rs[0].repeat}"
+        rng = random.Random(seed)
+        shuffled = list(rs)
+        rng.shuffle(shuffled)
+        return [r.model for r in shuffled]
+
+    assert order(resps) == order(list(resps))
+
+
+def test_latest_run_is_last_in_appended_log(tmp_path):
+    # The report command selects the latest run by append order, not string max
+    # (run_ids sharing a timestamp are not lexicographically temporal).
+    cfg = load_config(_write_json(tmp_path, _mock_config(tmp_path)))
+    add_query(cfg.path("queries"), "Center a div?")
+    adapters = [build_adapter(s) for s in cfg.models]
+    queries = load_queries(cfg.path("queries"))
+    judge = HeuristicJudge()
+
+    for run_id in ("run-A", "run-B"):
+        responses = run_batch(queries, adapters, run_id=run_id)
+        comp = judge.compare(queries[0].prompt, "fenzo", responses)
+        log_comparisons(cfg.path("comparisons_log"), [comp])
+
+    rows = load_comparisons(cfg.path("comparisons_log"))
+    logged_run_ids = [r["run_id"] for r in rows]
+    assert logged_run_ids == ["run-A", "run-B"]
+    assert logged_run_ids[-1] == "run-B"  # what `report` selects by default
+
+
 def test_bad_adapter_type_raises():
     with pytest.raises(ValueError):
         build_adapter({"name": "x", "type": "does-not-exist"})

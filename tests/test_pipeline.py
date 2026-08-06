@@ -245,6 +245,44 @@ def test_fenzo_waits_for_streamed_reply_to_stabilize():
     assert text == "abc"
 
 
+def test_fenzo_joins_nonempty_sections_skipping_empty():
+    # Fenzo renders a generated lesson as several .markdown-viewer sections, the
+    # last often empty. The adapter must join the non-empty ones, not read the
+    # last (empty) one.
+    from benchmarker.models.fenzo_web import FenzoWebAdapter
+
+    class _Bubbles:
+        def __init__(self, texts):
+            self._t = texts
+
+        def count(self):
+            return len(self._t)
+
+        def nth(self, i):
+            text = self._t[i]
+
+            class _E:
+                def inner_text(self_inner):
+                    return text
+
+            return _E()
+
+    class _Page:
+        def __init__(self, texts):
+            self._t = texts
+
+        def wait_for_timeout(self, *a, **k):
+            pass
+
+        def locator(self, _sel):
+            return _Bubbles(self._t)
+
+    sections = ["Section A: overview", "Section B: detail", ""]  # last is empty
+    adapter = FenzoWebAdapter(name="fenzo", url="http://x", settle_ms=0, stable_ms=1500, timeout_ms=60000)
+    text = adapter._wait_for_stable_reply(_Page(sections))
+    assert text == "Section A: overview\n\nSection B: detail"
+
+
 def test_fenzo_defaults_use_confirmed_selectors():
     from benchmarker.models.fenzo_web import FenzoWebAdapter
 

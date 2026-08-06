@@ -25,21 +25,22 @@ paths:
 # The line-up. `type` selects the adapter. Swap any `mock` entry for a real one.
 models:
   # --- Fenzo AI: web-only, so we drive its UI with a headless browser. ---
-  # Selectors below are the ones confirmed from Fenzo's DOM. Update `url` to the
-  # real chat page and set `send_selector` if Enter doesn't submit.
-  # To start with the mock while wiring things up, use `type: mock` here.
+  # NOTE: Fenzo is a COURSE GENERATOR, not a chatbot. A prompt navigates through
+  # /home -> /course/<id> -> /course/.../<lesson> and renders a generated lesson
+  # as several `.markdown-viewer` sections. The adapter joins the non-empty
+  # sections once generation settles (~20-30s). Selectors below are confirmed.
   - name: fenzo
     type: fenzo_web
-    url: "https://app.fenzo.ai/chat"          # TODO: confirm the real chat URL
+    url: "https://fenzo.ai/home"               # the page with the prompt box
     input_selector: "#fenzo-input-box"         # confirmed: the prompt textarea
-    send_selector: null                        # confirmed: Enter submits, so no send button needed
-    response_selector: ".markdown-viewer"      # confirmed: rendered assistant reply
+    send_selector: null                        # confirmed: Enter submits
+    response_selector: ".markdown-viewer"      # confirmed: generated lesson sections
     ready_selector: null                       # e.g. a post-login element to await
     storage_state: "fenzo_auth.json"           # Playwright storage-state for login
     headless: true
-    settle_ms: 500                             # initial grace before polling
-    stable_ms: 1200                            # reply "done" once text is unchanged this long
-    timeout_ms: 90000
+    settle_ms: 1000                            # grace after submit before polling
+    stable_ms: 2500                            # content "done" once unchanged this long
+    timeout_ms: 120000                         # course generation can take 20-40s
 
   # --- Comparison LLMs via their APIs. ---
   - name: claude-opus-5

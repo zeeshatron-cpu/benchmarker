@@ -26,9 +26,9 @@ models:
     response_selector: ".markdown-viewer"
     storage_state: "fenzo_auth.json"       # captured in step 2
     headless: false                        # show the browser so you can watch it
-    settle_ms: 500
-    stable_ms: 1200
-    timeout_ms: 90000
+    settle_ms: 1000
+    stable_ms: 2500
+    timeout_ms: 120000
 
   - name: claude-opus-5
     type: mock

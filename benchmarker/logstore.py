@@ -26,7 +26,7 @@ def _append(path: str | Path, rows: Iterable[dict[str, Any]]) -> int:
     p.parent.mkdir(parents=True, exist_ok=True)
     n = 0
     stamp = datetime.now(timezone.utc).isoformat()
-    with p.open("a") as fh:
+    with p.open("a", encoding="utf-8") as fh:
         for row in rows:
             row = {"logged_at": stamp, **row}
             fh.write(json.dumps(row) + "\n")
@@ -47,7 +47,7 @@ def load_comparisons(path: str | Path) -> list[dict[str, Any]]:
     if not p.exists():
         return []
     out = []
-    for line in p.read_text().splitlines():
+    for line in p.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if line:
             out.append(json.loads(line))

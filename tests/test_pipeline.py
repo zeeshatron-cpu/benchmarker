@@ -253,6 +253,35 @@ def test_fenzo_defaults_use_confirmed_selectors():
     assert a.response_selector == ".markdown-viewer"
 
 
+def test_adapter_created_and_closed_on_same_thread(tmp_path):
+    # Playwright objects are thread-bound: the runner must close each adapter on
+    # the same worker thread that used it, not later from the main thread.
+    import threading
+
+    from benchmarker.models.base import ModelAdapter
+    from benchmarker.recorder import Query
+
+    class ThreadProbe(ModelAdapter):
+        def __init__(self, name, **kw):
+            super().__init__(name, **kw)
+            self.ask_thread = None
+            self.close_thread = None
+
+        def _ask(self, prompt):
+            self.ask_thread = threading.get_ident()
+            return "ok", {}
+
+        def close(self):
+            self.close_thread = threading.get_ident()
+
+    probe = ThreadProbe("fenzo")
+    run_batch([Query(id="q-1", prompt="hi")], [probe], run_id="r1")
+
+    assert probe.ask_thread is not None
+    assert probe.close_thread == probe.ask_thread  # same thread — Playwright-safe
+    assert probe.close_thread != threading.get_ident()  # not the main thread
+
+
 def test_bad_adapter_type_raises():
     with pytest.raises(ValueError):
         build_adapter({"name": "x", "type": "does-not-exist"})

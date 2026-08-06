@@ -54,14 +54,21 @@ def run_batch(
     repeats = max(1, repeats)
 
     def run_adapter(adapter: ModelAdapter) -> list[ModelResponse]:
-        # All of this adapter's work happens on one thread (Playwright-safe).
+        # All of this adapter's work — including teardown — happens on one
+        # thread. Playwright objects are bound to their creating thread, so the
+        # Fenzo adapter must also be closed here, not later from the main thread
+        # (which raises "cannot switch to a different thread"). close() is
+        # idempotent, so the caller may still call it defensively.
         out: list[ModelResponse] = []
-        for rep in range(repeats):
-            for q in queries:
-                resp = adapter.ask(q.id, q.prompt)
-                resp.run_id = run_id
-                resp.repeat = rep
-                out.append(resp)
+        try:
+            for rep in range(repeats):
+                for q in queries:
+                    resp = adapter.ask(q.id, q.prompt)
+                    resp.run_id = run_id
+                    resp.repeat = rep
+                    out.append(resp)
+        finally:
+            adapter.close()
         return out
 
     results: list[ModelResponse] = []

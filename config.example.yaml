@@ -32,8 +32,7 @@ models:
     type: fenzo_web
     url: "https://app.fenzo.ai/chat"          # TODO: confirm the real chat URL
     input_selector: "#fenzo-input-box"         # confirmed: the prompt textarea
-    send_selector: null                        # confirmed textarea; try Enter first,
-                                               # set to the send button if Enter adds a newline
+    send_selector: null                        # confirmed: Enter submits, so no send button needed
     response_selector: ".markdown-viewer"      # confirmed: rendered assistant reply
     ready_selector: null                       # e.g. a post-login element to await
     storage_state: "fenzo_auth.json"           # Playwright storage-state for login

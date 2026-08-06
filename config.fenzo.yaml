@@ -1,0 +1,39 @@
+# Fenzo-only smoke-test config — confirms the Fenzo web automation works with
+# ZERO API keys. Fenzo is driven for real; the two "competitors" are mocked and
+# the judge is the offline heuristic. Once a Fenzo run succeeds, switch the two
+# mock models to `type: anthropic` / `type: openai` and the judge to `anthropic`
+# for a real comparison (that needs ANTHROPIC_API_KEY / OPENAI_API_KEY).
+
+subject: fenzo
+
+# Heuristic judge → no API key needed. Swap to {type: anthropic, model: claude-opus-5} later.
+judge:
+  name: judge
+  type: heuristic
+
+paths:
+  queries: queries/queries.jsonl
+  responses_log: logs/responses.jsonl
+  comparisons_log: logs/comparisons.jsonl
+  reports_dir: reports
+
+models:
+  - name: fenzo
+    type: fenzo_web
+    url: "https://fenzo.ai/home"          # the page with the message box
+    input_selector: "#fenzo-input-box"
+    send_selector: null                    # Enter submits
+    response_selector: ".markdown-viewer"
+    storage_state: "fenzo_auth.json"       # captured in step 2
+    headless: false                        # show the browser so you can watch it
+    settle_ms: 500
+    stable_ms: 1200
+    timeout_ms: 90000
+
+  - name: claude-opus-5
+    type: mock
+    persona: verbose
+
+  - name: gpt-4o
+    type: mock
+    persona: concise

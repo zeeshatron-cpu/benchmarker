@@ -201,6 +201,58 @@ def test_latest_run_is_last_in_appended_log(tmp_path):
     assert logged_run_ids[-1] == "run-B"  # what `report` selects by default
 
 
+def test_fenzo_waits_for_streamed_reply_to_stabilize():
+    # The adapter must return the final reply, not a mid-stream fragment.
+    from benchmarker.models.fenzo_web import FenzoWebAdapter
+
+    class _Last:
+        def __init__(self, frames):
+            self._frames = frames
+            self._i = 0
+
+        def inner_text(self):
+            v = self._frames[min(self._i, len(self._frames) - 1)]
+            self._i += 1
+            return v
+
+    class _Bubbles:
+        def __init__(self, last):
+            self._last = last
+
+        def count(self):
+            return 1
+
+        def nth(self, _i):
+            return self._last
+
+    class _Page:
+        def __init__(self, last):
+            self._last = last
+
+        def wait_for_function(self, *a, **k):
+            pass
+
+        def wait_for_timeout(self, *a, **k):
+            pass
+
+        def locator(self, _sel):
+            return _Bubbles(self._last)
+
+    # Streams "a" -> "ab" -> "abc", then holds steady.
+    frames = ["a", "ab", "abc"] + ["abc"] * 20
+    adapter = FenzoWebAdapter(name="fenzo", url="http://x", stable_ms=900, timeout_ms=60000)
+    text = adapter._wait_for_stable_reply(_Page(_Last(frames)), before=0)
+    assert text == "abc"
+
+
+def test_fenzo_defaults_use_confirmed_selectors():
+    from benchmarker.models.fenzo_web import FenzoWebAdapter
+
+    a = FenzoWebAdapter(name="fenzo")
+    assert a.input_selector == "#fenzo-input-box"
+    assert a.response_selector == ".markdown-viewer"
+
+
 def test_bad_adapter_type_raises():
     with pytest.raises(ValueError):
         build_adapter({"name": "x", "type": "does-not-exist"})

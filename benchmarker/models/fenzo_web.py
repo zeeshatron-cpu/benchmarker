@@ -10,20 +10,28 @@ Playwright is an optional dependency; the import is lazy. Chromium is expected a
 the platform's configured path (in this environment Playwright is preconfigured
 — do not run ``playwright install``).
 
+Streaming-safe reply capture: chat UIs stream the answer token by token, so a
+fixed wait either truncates long replies or wastes time on short ones. Instead we
+wait for a *new* assistant bubble to appear, then poll its text until it stops
+growing for ``stable_ms`` (bounded by ``timeout_ms``). ``settle_ms`` is only a
+small initial grace before polling begins.
+
 Config block (see config.example.yaml) — the ``fenzo`` adapter options:
     url:            chat page URL
-    input_selector: CSS/text selector for the prompt textarea
+    input_selector: selector for the prompt box (default ``#fenzo-input-box``)
     send_selector:  selector for the send button (optional; Enter used if absent)
-    response_selector: selector matching assistant message bubbles
+    response_selector: selector matching assistant reply bubbles (default ``.markdown-viewer``)
     ready_selector: optional selector to wait for before typing (e.g. after login)
-    settle_ms:      idle time to wait after the reply appears to catch streaming
-    timeout_ms:     per-step timeout
+    settle_ms:      initial grace before polling for reply text (ms)
+    stable_ms:      reply is "done" once its text is unchanged this long (ms)
+    timeout_ms:     per-step / overall reply timeout (ms)
     storage_state:  path to a Playwright storage-state JSON for a logged-in session
     headless:       bool
 """
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from .base import ModelAdapter
@@ -34,12 +42,13 @@ class FenzoWebAdapter(ModelAdapter):
         self,
         name: str = "fenzo",
         url: str = "",
-        input_selector: str = "textarea",
+        input_selector: str = "#fenzo-input-box",
         send_selector: str | None = None,
-        response_selector: str = "[data-role='assistant'], .assistant-message",
+        response_selector: str = ".markdown-viewer",
         ready_selector: str | None = None,
-        settle_ms: int = 1500,
-        timeout_ms: int = 60000,
+        settle_ms: int = 500,
+        stable_ms: int = 1200,
+        timeout_ms: int = 90000,
         storage_state: str | None = None,
         headless: bool = True,
         **kwargs: Any,
@@ -51,6 +60,7 @@ class FenzoWebAdapter(ModelAdapter):
         self.response_selector = response_selector
         self.ready_selector = ready_selector
         self.settle_ms = settle_ms
+        self.stable_ms = stable_ms
         self.timeout_ms = timeout_ms
         self.storage_state = storage_state
         self.headless = headless
@@ -69,6 +79,35 @@ class FenzoWebAdapter(ModelAdapter):
         if self.storage_state:
             ctx_kwargs["storage_state"] = self.storage_state
         self._context = self._browser.new_context(**ctx_kwargs)
+
+    def _wait_for_stable_reply(self, page, before: int) -> str:
+        """Wait for a new bubble, then until its text stops growing."""
+        # A new assistant bubble has appeared.
+        page.wait_for_function(
+            "([sel, n]) => document.querySelectorAll(sel).length > n",
+            arg=[self.response_selector, before],
+        )
+        page.wait_for_timeout(self.settle_ms)
+
+        bubbles = page.locator(self.response_selector)
+        last = bubbles.nth(bubbles.count() - 1)
+
+        prev = ""
+        stable_for_ms = 0
+        poll_ms = 300
+        deadline = time.monotonic() + self.timeout_ms / 1000
+        while time.monotonic() < deadline:
+            cur = (last.inner_text() or "").strip()
+            if cur and cur == prev:
+                stable_for_ms += poll_ms
+                if stable_for_ms >= self.stable_ms:
+                    return cur
+            else:
+                stable_for_ms = 0
+                prev = cur
+            page.wait_for_timeout(poll_ms)
+        # Timed out mid-stream — return what we have rather than nothing.
+        return prev
 
     def _ask(self, prompt: str) -> tuple[str, dict[str, Any]]:
         if not self.url:
@@ -95,15 +134,7 @@ class FenzoWebAdapter(ModelAdapter):
             else:
                 box.press("Enter")
 
-            # Wait for a new assistant bubble to appear, then let streaming settle.
-            page.wait_for_function(
-                "([sel, n]) => document.querySelectorAll(sel).length > n",
-                arg=[self.response_selector, before],
-            )
-            page.wait_for_timeout(self.settle_ms)
-
-            bubbles = page.locator(self.response_selector)
-            text = bubbles.nth(bubbles.count() - 1).inner_text().strip()
+            text = self._wait_for_stable_reply(page, before)
             return text, {"source": "web", "url": self.url}
         finally:
             page.close()

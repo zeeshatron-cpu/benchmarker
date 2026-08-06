@@ -25,19 +25,22 @@ paths:
 # The line-up. `type` selects the adapter. Swap any `mock` entry for a real one.
 models:
   # --- Fenzo AI: web-only, so we drive its UI with a headless browser. ---
-  # All selectors are examples — inspect the real Fenzo chat page and update.
+  # Selectors below are the ones confirmed from Fenzo's DOM. Update `url` to the
+  # real chat page and set `send_selector` if Enter doesn't submit.
   # To start with the mock while wiring things up, use `type: mock` here.
   - name: fenzo
     type: fenzo_web
-    url: "https://app.fenzo.ai/chat"          # the chat page
-    input_selector: "textarea"                 # the prompt box
-    send_selector: "button[type=submit]"       # send control (omit to press Enter)
-    response_selector: "[data-role='assistant']"  # assistant message bubbles
+    url: "https://app.fenzo.ai/chat"          # TODO: confirm the real chat URL
+    input_selector: "#fenzo-input-box"         # confirmed: the prompt textarea
+    send_selector: null                        # confirmed textarea; try Enter first,
+                                               # set to the send button if Enter adds a newline
+    response_selector: ".markdown-viewer"      # confirmed: rendered assistant reply
     ready_selector: null                       # e.g. a post-login element to await
     storage_state: "fenzo_auth.json"           # Playwright storage-state for login
     headless: true
-    settle_ms: 1500
-    timeout_ms: 60000
+    settle_ms: 500                             # initial grace before polling
+    stable_ms: 1200                            # reply "done" once text is unchanged this long
+    timeout_ms: 90000
 
   # --- Comparison LLMs via their APIs. ---
   - name: claude-opus-5

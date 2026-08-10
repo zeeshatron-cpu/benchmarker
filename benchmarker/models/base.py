@@ -54,14 +54,24 @@ class ModelAdapter:
     #: Human-facing name, e.g. "fenzo" or "claude-opus-5". Set per instance.
     name: str = "base"
 
-    def __init__(self, name: str, **kwargs: Any) -> None:
+    def __init__(self, name: str, prompt_template: str | None = None, **kwargs: Any) -> None:
         self.name = name
+        # Optional wrapper applied to every query before it reaches the backend,
+        # e.g. "Create a short lesson on: {query}". Lets the comparison models be
+        # asked for an artifact comparable to Fenzo's generated course, while
+        # Fenzo itself receives the raw topic. Use "{query}" as the placeholder.
+        self.prompt_template = prompt_template
         self.options = kwargs
+
+    def _render(self, prompt: str) -> str:
+        if self.prompt_template:
+            return self.prompt_template.replace("{query}", prompt)
+        return prompt
 
     def ask(self, query_id: str, prompt: str) -> ModelResponse:
         start = time.perf_counter()
         try:
-            text, meta = self._ask(prompt)
+            text, meta = self._ask(self._render(prompt))
             return ModelResponse(
                 model=self.name,
                 query_id=query_id,

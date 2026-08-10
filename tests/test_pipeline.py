@@ -320,6 +320,34 @@ def test_adapter_created_and_closed_on_same_thread(tmp_path):
     assert probe.close_thread != threading.get_ident()  # not the main thread
 
 
+def test_prompt_template_wraps_query_for_comparison_models():
+    # Comparison models get a lesson brief; Fenzo gets the raw topic.
+    from benchmarker.models.base import ModelAdapter
+
+    class Capture(ModelAdapter):
+        def _ask(self, prompt):
+            return prompt, {}
+
+    templated = Capture(
+        "claude", prompt_template="Teach this to a beginner.\n\nTopic: {query}"
+    )
+    plain = Capture("fenzo")
+
+    assert templated.ask("q-1", "balance sheets").text == (
+        "Teach this to a beginner.\n\nTopic: balance sheets"
+    )
+    assert plain.ask("q-1", "balance sheets").text == "balance sheets"
+
+
+def test_prompt_template_from_config_builds():
+    a = build_adapter(
+        {"name": "c", "type": "mock", "prompt_template": "Lesson on {query}"}
+    )
+    assert a.prompt_template == "Lesson on {query}"
+    # Mock ignores the wrapper's content but the query still flows through.
+    assert a.ask("q-1", "x").ok
+
+
 def test_bad_adapter_type_raises():
     with pytest.raises(ValueError):
         build_adapter({"name": "x", "type": "does-not-exist"})

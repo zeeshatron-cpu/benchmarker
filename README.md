@@ -110,6 +110,18 @@ tests/test_pipeline.py   # end-to-end, mock-only, runs in CI
   report is regenerable from `logs/comparisons.jsonl`, scoped to a run so re-runs
   don't double-count.
 
+## Fenzo is a course generator (fair comparison)
+
+Fenzo AI doesn't answer like a chatbot — a prompt makes it generate a
+multi-section **course/lesson** (navigating `/home` → `/course/<id>` →
+`/course/.../<lesson>`). The Fenzo adapter waits for generation to settle and
+joins the lesson's content sections. To compare fairly, the other models are
+asked (via each model's `prompt_template` in config, `{query}` = the topic) to
+produce a **comparable lesson** on the same topic, and the judge scores teaching
+quality on substance rather than length. See `config.compare.yaml` for the
+real, keys-required setup; `config.fenzo.yaml` is a keys-free smoke test that
+drives Fenzo for real and mocks the rest.
+
 ## Known limitations
 
 This is a prototype; treat verdicts as directional, not authoritative:

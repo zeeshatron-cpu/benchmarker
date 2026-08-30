@@ -14,13 +14,33 @@ import argparse
 import sys
 from pathlib import Path
 
+import os
+
 from .comparator import Comparison, make_judge
 from .config import load_config
+from .envfile import load_dotenv
 from .logstore import log_comparisons, log_responses
 from .models import build_adapter
 from .recorder import add_query, load_queries
 from .report import write_report
 from .runner import group_by_query, new_run_id, run_batch
+
+# Which env var each backend type needs for auth.
+_KEY_FOR_TYPE = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+}
+
+
+def _preflight_keys(cfg) -> list[str]:
+    """Return human-readable messages for any missing API keys the config needs."""
+    needed: dict[str, str] = {}
+    specs = list(cfg.models) + [cfg.judge]
+    for spec in specs:
+        env_var = _KEY_FOR_TYPE.get(spec.get("type"))
+        if env_var and not os.environ.get(env_var):
+            needed[env_var] = spec.get("name", spec.get("type"))
+    return [f"{var} (needed by '{who}')" for var, who in needed.items()]
 
 
 def _cmd_record(args, cfg) -> int:
@@ -40,6 +60,21 @@ def _cmd_run(args, cfg) -> int:
         queries = [q for q in queries if q.id in set(args.query_id)]
     if not queries:
         print("no queries to run — record some first", file=sys.stderr)
+        return 1
+
+    # Preflight: fail fast with a clear message if a real backend lacks its key,
+    # rather than a cryptic SDK error mid-run. --no-llm-judge exempts the judge.
+    missing = _preflight_keys(cfg)
+    if args.no_llm_judge:
+        missing = [m for m in missing if not m.startswith("ANTHROPIC_API_KEY (needed by 'judge')")]
+    if missing:
+        print("missing API key(s):", file=sys.stderr)
+        for m in missing:
+            print(f"  - {m}", file=sys.stderr)
+        print(
+            "add them to a local .env file (copy .env.example) — never commit it.",
+            file=sys.stderr,
+        )
         return 1
 
     adapters = [build_adapter(spec) for spec in cfg.models]
@@ -155,6 +190,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Load API keys from a local .env (gitignored) so runs are plug-and-go.
+    load_dotenv()
     parser = build_parser()
     args = parser.parse_args(argv)
     cfg = load_config(args.config)

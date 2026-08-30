@@ -34,8 +34,11 @@ from .models import ModelResponse
 
 JUDGE_SYSTEM = (
     "You are a rigorous, impartial evaluator of AI assistant responses. "
-    "You judge only on the merits of each answer to the user's query: "
-    "correctness, relevance, completeness, clarity, and usefulness. "
+    "The answers may be explanations or short lessons on the user's topic; "
+    "judge each on its merits for someone trying to learn: correctness, "
+    "relevance, completeness, clarity, structure, and usefulness. "
+    "Judge substance, not length — do not reward an answer for being longer, "
+    "and do not penalise a concise answer that fully addresses the topic. "
     "You do not know which product produced which answer and must not guess."
 )
 

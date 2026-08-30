@@ -7,6 +7,7 @@ steps: record, run, compare, log/report.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -199,6 +200,199 @@ def test_latest_run_is_last_in_appended_log(tmp_path):
     logged_run_ids = [r["run_id"] for r in rows]
     assert logged_run_ids == ["run-A", "run-B"]
     assert logged_run_ids[-1] == "run-B"  # what `report` selects by default
+
+
+def test_fenzo_waits_for_streamed_reply_to_stabilize():
+    # The adapter must return the final reply, not a mid-stream fragment.
+    from benchmarker.models.fenzo_web import FenzoWebAdapter
+
+    class _Last:
+        def __init__(self, frames):
+            self._frames = frames
+            self._i = 0
+
+        def inner_text(self):
+            v = self._frames[min(self._i, len(self._frames) - 1)]
+            self._i += 1
+            return v
+
+    class _Bubbles:
+        def __init__(self, last):
+            self._last = last
+
+        def count(self):
+            return 1
+
+        def nth(self, _i):
+            return self._last
+
+    class _Page:
+        def __init__(self, last):
+            self._last = last
+
+        def wait_for_function(self, *a, **k):
+            pass
+
+        def wait_for_timeout(self, *a, **k):
+            pass
+
+        def locator(self, _sel):
+            return _Bubbles(self._last)
+
+    # Streams "a" -> "ab" -> "abc", then holds steady.
+    frames = ["a", "ab", "abc"] + ["abc"] * 20
+    adapter = FenzoWebAdapter(name="fenzo", url="http://x", stable_ms=900, timeout_ms=60000)
+    text = adapter._wait_for_stable_reply(_Page(_Last(frames)), before=0)
+    assert text == "abc"
+
+
+def test_fenzo_joins_nonempty_sections_skipping_empty():
+    # Fenzo renders a generated lesson as several .markdown-viewer sections, the
+    # last often empty. The adapter must join the non-empty ones, not read the
+    # last (empty) one.
+    from benchmarker.models.fenzo_web import FenzoWebAdapter
+
+    class _Bubbles:
+        def __init__(self, texts):
+            self._t = texts
+
+        def count(self):
+            return len(self._t)
+
+        def nth(self, i):
+            text = self._t[i]
+
+            class _E:
+                def inner_text(self_inner):
+                    return text
+
+            return _E()
+
+    class _Page:
+        def __init__(self, texts):
+            self._t = texts
+
+        def wait_for_timeout(self, *a, **k):
+            pass
+
+        def locator(self, _sel):
+            return _Bubbles(self._t)
+
+    sections = ["Section A: overview", "Section B: detail", ""]  # last is empty
+    adapter = FenzoWebAdapter(name="fenzo", url="http://x", settle_ms=0, stable_ms=1500, timeout_ms=60000)
+    text = adapter._wait_for_stable_reply(_Page(sections))
+    assert text == "Section A: overview\n\nSection B: detail"
+
+
+def test_fenzo_defaults_use_confirmed_selectors():
+    from benchmarker.models.fenzo_web import FenzoWebAdapter
+
+    a = FenzoWebAdapter(name="fenzo")
+    assert a.input_selector == "#fenzo-input-box"
+    assert a.response_selector == ".markdown-viewer"
+
+
+def test_adapter_created_and_closed_on_same_thread(tmp_path):
+    # Playwright objects are thread-bound: the runner must close each adapter on
+    # the same worker thread that used it, not later from the main thread.
+    import threading
+
+    from benchmarker.models.base import ModelAdapter
+    from benchmarker.recorder import Query
+
+    class ThreadProbe(ModelAdapter):
+        def __init__(self, name, **kw):
+            super().__init__(name, **kw)
+            self.ask_thread = None
+            self.close_thread = None
+
+        def _ask(self, prompt):
+            self.ask_thread = threading.get_ident()
+            return "ok", {}
+
+        def close(self):
+            self.close_thread = threading.get_ident()
+
+    probe = ThreadProbe("fenzo")
+    run_batch([Query(id="q-1", prompt="hi")], [probe], run_id="r1")
+
+    assert probe.ask_thread is not None
+    assert probe.close_thread == probe.ask_thread  # same thread — Playwright-safe
+    assert probe.close_thread != threading.get_ident()  # not the main thread
+
+
+def test_prompt_template_wraps_query_for_comparison_models():
+    # Comparison models get a lesson brief; Fenzo gets the raw topic.
+    from benchmarker.models.base import ModelAdapter
+
+    class Capture(ModelAdapter):
+        def _ask(self, prompt):
+            return prompt, {}
+
+    templated = Capture(
+        "claude", prompt_template="Teach this to a beginner.\n\nTopic: {query}"
+    )
+    plain = Capture("fenzo")
+
+    assert templated.ask("q-1", "balance sheets").text == (
+        "Teach this to a beginner.\n\nTopic: balance sheets"
+    )
+    assert plain.ask("q-1", "balance sheets").text == "balance sheets"
+
+
+def test_prompt_template_from_config_builds():
+    a = build_adapter(
+        {"name": "c", "type": "mock", "prompt_template": "Lesson on {query}"}
+    )
+    assert a.prompt_template == "Lesson on {query}"
+    # Mock ignores the wrapper's content but the query still flows through.
+    assert a.ask("q-1", "x").ok
+
+
+def test_dotenv_loader_sets_missing_and_preserves_existing(tmp_path, monkeypatch):
+    from benchmarker.envfile import load_dotenv
+
+    env = tmp_path / ".env"
+    env.write_text(
+        "# a comment\n"
+        "\n"
+        'BENCH_TEST_NEW="from-file"\n'
+        "BENCH_TEST_EXISTING=from-file\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("BENCH_TEST_NEW", raising=False)
+    monkeypatch.setenv("BENCH_TEST_EXISTING", "from-env")  # real env wins
+
+    load_dotenv(env)
+
+    assert os.environ["BENCH_TEST_NEW"] == "from-file"  # quotes stripped
+    assert os.environ["BENCH_TEST_EXISTING"] == "from-env"  # not overridden
+
+
+def test_preflight_reports_missing_keys(monkeypatch):
+    from benchmarker.cli import _preflight_keys
+    from benchmarker.config import Config
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    cfg = Config(
+        subject="fenzo",
+        judge={"name": "judge", "type": "anthropic", "model": "claude-opus-5"},
+        paths={},
+        models=[
+            {"name": "fenzo", "type": "fenzo_web"},
+            {"name": "gpt-4o", "type": "openai"},
+        ],
+    )
+    msgs = _preflight_keys(cfg)
+    joined = " ".join(msgs)
+    assert "ANTHROPIC_API_KEY" in joined  # judge
+    assert "OPENAI_API_KEY" in joined     # gpt
+    assert "fenzo" not in joined          # web adapter needs no key
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    monkeypatch.setenv("OPENAI_API_KEY", "y")
+    assert _preflight_keys(cfg) == []
 
 
 def test_bad_adapter_type_raises():

@@ -1,0 +1,61 @@
+# Real comparison config — Fenzo vs Claude vs GPT, judged by Claude.
+#
+# Fenzo builds a full lesson from a topic, so the comparison models are asked
+# (via prompt_template) to produce a COMPARABLE lesson on the same topic. That
+# makes the judge's comparison apples-to-apples instead of "a course vs a
+# one-line answer".
+#
+# Requires API keys in the environment:
+#   $env:ANTHROPIC_API_KEY = "sk-ant-..."     # for gpt too set OPENAI_API_KEY
+#   $env:OPENAI_API_KEY    = "sk-..."
+# Then:  python -m benchmarker -c config.compare.yaml run
+
+subject: fenzo
+
+judge:
+  name: judge
+  type: anthropic
+  model: claude-opus-5
+
+paths:
+  queries: queries/queries.jsonl
+  responses_log: logs/responses.jsonl
+  comparisons_log: logs/comparisons.jsonl
+  reports_dir: reports
+
+# The lesson brief handed to the comparison models (not to Fenzo). {query} is
+# replaced with the recorded topic.
+models:
+  - name: fenzo
+    type: fenzo_web
+    url: "https://fenzo.ai/home"
+    input_selector: "#fenzo-input-box"
+    send_selector: null
+    response_selector: ".markdown-viewer"
+    storage_state: "fenzo_auth.json"
+    headless: true
+    settle_ms: 1000
+    stable_ms: 2500
+    timeout_ms: 120000
+
+  - name: claude-opus-5
+    type: anthropic
+    model: claude-opus-5
+    max_tokens: 2048
+    prompt_template: |
+      Create a concise, well-structured lesson that teaches the following topic
+      to a motivated beginner. Use short sections with clear headings and plain
+      language. Cover the essentials accurately; do not pad for length.
+
+      Topic: {query}
+
+  - name: gpt-4o
+    type: openai
+    model: gpt-4o
+    max_tokens: 2048
+    prompt_template: |
+      Create a concise, well-structured lesson that teaches the following topic
+      to a motivated beginner. Use short sections with clear headings and plain
+      language. Cover the essentials accurately; do not pad for length.
+
+      Topic: {query}

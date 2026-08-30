@@ -43,7 +43,7 @@ def load_queries(path: str | Path) -> list[Query]:
     if not p.exists():
         return []
     queries: list[Query] = []
-    for line in p.read_text().splitlines():
+    for line in p.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
@@ -79,6 +79,6 @@ def add_query(
         tags=tags or [],
         recorded_at=_now(),
     )
-    with p.open("a") as fh:
+    with p.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(query.to_dict()) + "\n")
     return query

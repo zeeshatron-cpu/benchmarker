@@ -106,5 +106,7 @@ def write_report(
     d.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out = d / f"report-{stamp}.md"
-    out.write_text(build_markdown(comparisons, subject))
+    # UTF-8 explicitly — the report contains non-ASCII markers (arrows, ±) that
+    # Windows' default cp1252 encoding cannot write.
+    out.write_text(build_markdown(comparisons, subject), encoding="utf-8")
     return out

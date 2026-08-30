@@ -50,7 +50,7 @@ def _load_raw(path: str | Path | None) -> dict[str, Any]:
     if path is None:
         return dict(DEFAULT_CONFIG)
     p = Path(path)
-    text = p.read_text()
+    text = p.read_text(encoding="utf-8")
     if p.suffix in {".yaml", ".yml"}:
         try:
             import yaml

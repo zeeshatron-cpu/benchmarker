@@ -7,6 +7,7 @@ steps: record, run, compare, log/report.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -346,6 +347,52 @@ def test_prompt_template_from_config_builds():
     assert a.prompt_template == "Lesson on {query}"
     # Mock ignores the wrapper's content but the query still flows through.
     assert a.ask("q-1", "x").ok
+
+
+def test_dotenv_loader_sets_missing_and_preserves_existing(tmp_path, monkeypatch):
+    from benchmarker.envfile import load_dotenv
+
+    env = tmp_path / ".env"
+    env.write_text(
+        "# a comment\n"
+        "\n"
+        'BENCH_TEST_NEW="from-file"\n'
+        "BENCH_TEST_EXISTING=from-file\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("BENCH_TEST_NEW", raising=False)
+    monkeypatch.setenv("BENCH_TEST_EXISTING", "from-env")  # real env wins
+
+    load_dotenv(env)
+
+    assert os.environ["BENCH_TEST_NEW"] == "from-file"  # quotes stripped
+    assert os.environ["BENCH_TEST_EXISTING"] == "from-env"  # not overridden
+
+
+def test_preflight_reports_missing_keys(monkeypatch):
+    from benchmarker.cli import _preflight_keys
+    from benchmarker.config import Config
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    cfg = Config(
+        subject="fenzo",
+        judge={"name": "judge", "type": "anthropic", "model": "claude-opus-5"},
+        paths={},
+        models=[
+            {"name": "fenzo", "type": "fenzo_web"},
+            {"name": "gpt-4o", "type": "openai"},
+        ],
+    )
+    msgs = _preflight_keys(cfg)
+    joined = " ".join(msgs)
+    assert "ANTHROPIC_API_KEY" in joined  # judge
+    assert "OPENAI_API_KEY" in joined     # gpt
+    assert "fenzo" not in joined          # web adapter needs no key
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    monkeypatch.setenv("OPENAI_API_KEY", "y")
+    assert _preflight_keys(cfg) == []
 
 
 def test_bad_adapter_type_raises():

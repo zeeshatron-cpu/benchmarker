@@ -8,6 +8,11 @@ config.yaml
 config.json
 *_auth.json
 
+# API keys — NEVER commit. Only .env.example (with blank values) is tracked.
+.env
+.env.*
+!.env.example
+
 # Generated artefacts.
 logs/*.jsonl
 reports/*.md

@@ -110,6 +110,24 @@ tests/test_pipeline.py   # end-to-end, mock-only, runs in CI
   report is regenerable from `logs/comparisons.jsonl`, scoped to a run so re-runs
   don't double-count.
 
+## Plug-and-go API keys
+
+Keys live in a local, gitignored `.env` file — **never** in the repo. Set up once:
+
+```powershell
+Copy-Item .env.example .env      # then edit .env and paste your keys
+```
+```
+ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=sk-...
+```
+
+Every run loads `.env` automatically (no `export` needed). If a config needs a
+key that's missing, the run stops with a clear message naming the missing key
+instead of a cryptic SDK error. On Windows, `./go.ps1 "your topic"` runs the full
+real comparison end to end (checks `.env` and `fenzo_auth.json`, records the
+query, runs, and opens the report).
+
 ## Fenzo is a course generator (fair comparison)
 
 Fenzo AI doesn't answer like a chatbot — a prompt makes it generate a
